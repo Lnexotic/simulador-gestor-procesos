@@ -38,7 +38,7 @@
   TRANSICIONES VÁLIDAS:
     NEW       → READY                      (el proceso es admitido)
     READY     → RUNNING                    (el scheduler lo despacha)
-    RUNNING   → READY                      (preemption / quantum expirado)
+    RUNNING   → READY                      (suspensión o cambio de contexto)
     RUNNING   → WAITING                    (solicita I/O o recurso)
     RUNNING   → TERMINATED                 (finaliza ejecución o es matado)
     WAITING   → READY                      (I/O completado, recurso disponible)
@@ -106,7 +106,7 @@ VALID_TRANSITIONS: dict[ProcessState, frozenset[ProcessState]] = {
     ProcessState.NEW: frozenset({ProcessState.READY}),
     ProcessState.READY: frozenset({ProcessState.RUNNING}),
     ProcessState.RUNNING: frozenset({
-        ProcessState.READY,       # Preemption (Round Robin, Prioridades)
+        ProcessState.READY,       # Cambio de contexto (suspensión)
         ProcessState.WAITING,     # Solicitud de I/O
         ProcessState.TERMINATED,  # Fin de ejecución o kill
     }),

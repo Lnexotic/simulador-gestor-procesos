@@ -9,8 +9,6 @@
   ALGORITMOS IMPLEMENTADOS:
     1. FCFS  — First Come, First Served (FIFO, no-preemptive)
     2. SJF   — Shortest Job First (selecciona menor burst restante)
-    3. RR    — Round Robin (quantum configurable, preemptive)
-    4. PRIO  — Prioridades (menor número = mayor prioridad, preemptive)
 
   MODELO: Determinista por ticks. Cada llamada a execute_cycle() = 1 tick.
 ===============================================================================
@@ -28,8 +26,6 @@ class SchedulingAlgorithm(Enum):
     """Algoritmos de scheduling disponibles."""
     FCFS = auto()
     SJF = auto()
-    ROUND_ROBIN = auto()
-    PRIORITY = auto()
 
 
 class Scheduler:
@@ -44,16 +40,13 @@ class Scheduler:
         resources: ResourcePool,
         logger: Logger,
         algorithm: SchedulingAlgorithm = SchedulingAlgorithm.FCFS,
-        quantum: int = 3,
     ) -> None:
         self.ready_queue: deque[PCB] = deque()
         self.waiting_queue: list[PCB] = []
         self.all_processes: list[PCB] = []
         self.resources: ResourcePool = resources
         self.algorithm: SchedulingAlgorithm = algorithm
-        self.quantum: int = max(1, quantum)
         self.current_process: PCB | None = None
-        self.current_quantum_used: int = 0
         self.clock: int = 0
         self.logger: Logger = logger
 
@@ -99,12 +92,6 @@ class Scheduler:
                 shortest = min(self.ready_queue, key=lambda p: p.time_remaining)
                 self.ready_queue.remove(shortest)
                 return shortest
-            case SchedulingAlgorithm.ROUND_ROBIN:
-                return self.ready_queue.popleft()
-            case SchedulingAlgorithm.PRIORITY:
-                highest = min(self.ready_queue, key=lambda p: p.priority)
-                self.ready_queue.remove(highest)
-                return highest
 
         return self.ready_queue.popleft()
 
@@ -127,8 +114,6 @@ class Scheduler:
           1. Si CPU libre → despachar proceso (READY→RUNNING)
           2. Ejecutar tick del proceso actual
           3. ¿Terminó? → TERMINATED, liberar recursos
-          4. ¿Quantum expirado? (RR) → READY (preemption)
-          5. ¿Mayor prioridad en cola? (PRIO) → preemption
         """
         self.clock += 1
 
@@ -145,7 +130,6 @@ class Scheduler:
 
             next_pcb.transition(ProcessState.RUNNING)
             self.current_process = next_pcb
-            self.current_quantum_used = 0
             self.logger.log(
                 f"DISPATCH: PID {next_pcb.pid} ({next_pcb.name}) -> RUNNING "
                 f"[{self.algorithm.name}]",
@@ -155,7 +139,6 @@ class Scheduler:
         # Paso 2: Ejecutar tick
         assert self.current_process is not None
         self._execute_quantum(self.current_process)
-        self.current_quantum_used += 1
 
         # Paso 3: ¿Terminó?
         if self.current_process.time_remaining <= 0:
@@ -169,56 +152,10 @@ class Scheduler:
                 self.clock,
             )
             self.current_process = None
-            self.current_quantum_used = 0
             return (
                 f"[Tick {self.clock}] PID {finished.pid} ({finished.name}) "
                 f"TERMINADO (Normal)."
             )
-
-        # Paso 4: ¿Quantum expirado? (Round Robin)
-        if (
-            self.algorithm == SchedulingAlgorithm.ROUND_ROBIN
-            and self.current_quantum_used >= self.quantum
-        ):
-            preempted = self.current_process
-            preempted.transition(ProcessState.READY)
-            self.resources.release(cpu=1, ram=0)
-            self.ready_queue.append(preempted)
-            self.current_process = None
-            self.current_quantum_used = 0
-            self.logger.log(
-                f"PREEMPTION: PID {preempted.pid} ({preempted.name}) -> READY "
-                f"(quantum={self.quantum} expirado) | "
-                f"Restante: {preempted.time_remaining}",
-                self.clock,
-            )
-            return (
-                f"[Tick {self.clock}] PID {preempted.pid} interrumpido "
-                f"(quantum). Vuelve a READY."
-            )
-
-        # Paso 5: Preemption por prioridad
-        if (
-            self.algorithm == SchedulingAlgorithm.PRIORITY
-            and self.ready_queue
-        ):
-            best = min(self.ready_queue, key=lambda p: p.priority)
-            if best.priority < self.current_process.priority:
-                preempted_p = self.current_process
-                preempted_p.transition(ProcessState.READY)
-                self.resources.release(cpu=1, ram=0)
-                self.ready_queue.append(preempted_p)
-                self.current_process = None
-                self.current_quantum_used = 0
-                self.logger.log(
-                    f"PREEMPTION(Pri): PID {preempted_p.pid} desplazado por "
-                    f"PID {best.pid} (pri={best.priority}).",
-                    self.clock,
-                )
-                return (
-                    f"[Tick {self.clock}] PID {preempted_p.pid} desplazado "
-                    f"por mayor prioridad."
-                )
 
         return (
             f"[Tick {self.clock}] PID {self.current_process.pid} "
@@ -238,7 +175,6 @@ class Scheduler:
         self.resources.release(cpu=1, ram=0)
         self.waiting_queue.append(target)
         self.current_process = None
-        self.current_quantum_used = 0
         self.logger.log(f"SUSPEND: PID {target.pid} ({target.name}) -> WAITING", self.clock)
         return True
 
@@ -261,19 +197,10 @@ class Scheduler:
         return True
 
     # === Cambiar algoritmo ===
-    def set_algorithm(
-        self, algorithm: SchedulingAlgorithm, quantum: int | None = None
-    ) -> None:
+    def set_algorithm(self, algorithm: SchedulingAlgorithm) -> None:
         """Cambia el algoritmo de scheduling en caliente."""
         self.algorithm = algorithm
-        if quantum is not None:
-            self.quantum = max(1, quantum)
-        self.logger.log(
-            f"ALGORITMO: {algorithm.name}"
-            + (f" (quantum={self.quantum})"
-               if algorithm == SchedulingAlgorithm.ROUND_ROBIN else ""),
-            self.clock,
-        )
+        self.logger.log(f"ALGORITMO: {algorithm.name}", self.clock)
 
     # === Kill ===
     def kill_process(self, pid: int) -> bool:
@@ -298,7 +225,6 @@ class Scheduler:
                 self.clock,
             )
             self.current_process = None
-            self.current_quantum_used = 0
             return True
 
         # En cola READY
@@ -338,8 +264,6 @@ class Scheduler:
         lines.append("=" * 65)
         lines.append(f"  Reloj   : Tick {self.clock}")
         lines.append(f"  Algoritmo: {self.algorithm.name}")
-        if self.algorithm == SchedulingAlgorithm.ROUND_ROBIN:
-            lines.append(f"  Quantum  : {self.quantum} ticks")
         lines.append("")
         lines.append(str(self.resources))
         lines.append("")
@@ -347,10 +271,6 @@ class Scheduler:
         lines.append("--- PROCESO EN CPU ---")
         if self.current_process:
             lines.append(f"  {self.current_process}")
-            if self.algorithm == SchedulingAlgorithm.ROUND_ROBIN:
-                lines.append(
-                    f"  Quantum usado: {self.current_quantum_used}/{self.quantum}"
-                )
         else:
             lines.append("  (CPU ociosa)")
         lines.append("")

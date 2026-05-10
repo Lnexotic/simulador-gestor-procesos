@@ -9,7 +9,7 @@
 
   COMPONENTES PRINCIPALES (Cumplimiento de Rúbrica):
     - 4.1 / 4.2 / 5.1: Panel de Creación y Monitoreo (Memoria y CPU).
-    - 4.3 / 5.2: 4 Algoritmos (FCFS, SJF, RR, Prioridades) y Quantum Configurable.
+    - 4.3 / 5.2: 2 Algoritmos (FCFS, SJF).
     - 4.4 / 5.3: Comunicación IPC (Lanzador de Demo Productor-Consumidor).
     - 5.1 / 6: Suspensión, Reanudación y Terminación forzada (Kill).
     - 5.4 / 6: Registro y visor de Logs del sistema.
@@ -22,6 +22,7 @@
 import sys
 import os
 import threading
+import queue
 import tkinter as tk
 from tkinter import ttk, messagebox
 
@@ -47,7 +48,6 @@ class SimulatorGUI:
             resources=self.resources, 
             logger=self.logger, 
             algorithm=SchedulingAlgorithm.FCFS,
-            quantum=3
         )
         
         self._build_ui()
@@ -228,19 +228,47 @@ class SimulatorGUI:
         top.geometry("600x400")
         text_area = tk.Text(top, font=("Consolas", 10), bg="#2d2d2d", fg="#ffffff")
         text_area.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        
+
+        # Cola thread-safe para comunicar el hilo IPC con el hilo principal.
+        # ¿POR QUÉ una Queue y no escribir directo al widget?
+        # tkinter NO es thread-safe: modificar widgets desde un hilo 
+        # secundario puede causar crashes, texto corrupto o freezes.
+        # La Queue actúa como buzón seguro entre hilos.
+        msg_queue: queue.Queue[str | None] = queue.Queue()
+
         class RedirectText(object):
-            def __init__(self, text_widget):
-                self.text_widget = text_widget
-            def write(self, string):
-                self.text_widget.insert(tk.END, string)
-                self.text_widget.see(tk.END)
-            def flush(self):
+            """Redirige sys.stdout a la cola en lugar de al widget directo."""
+            def __init__(self, q: queue.Queue):
+                self.q = q
+            def write(self, string: str) -> None:
+                self.q.put(string)
+            def flush(self) -> None:
                 pass
-                
-        def run_demo_thread():
+
+        def poll_queue() -> None:
+            """
+            Drena la cola y escribe al widget desde el hilo principal.
+            Se programa cada 50ms con root.after() para garantizar
+            que SOLO el hilo de tkinter modifique el widget.
+            """
+            while not msg_queue.empty():
+                try:
+                    msg = msg_queue.get_nowait()
+                    if msg is None:
+                        # Señal de fin: deshabilitar edición del widget
+                        text_area.config(state=tk.DISABLED)
+                        return
+                    text_area.insert(tk.END, msg)
+                    text_area.see(tk.END)
+                except queue.Empty:
+                    break
+            # Reprogramar solo si la ventana sigue abierta
+            if top.winfo_exists():
+                top.after(50, poll_queue)
+
+        def run_demo_thread() -> None:
             old_stdout = sys.stdout
-            sys.stdout = RedirectText(text_area)
+            sys.stdout = RedirectText(msg_queue)
             try:
                 ipc_demo()
                 print("\n[+] Demo finalizada exitosamente.")
@@ -248,7 +276,10 @@ class SimulatorGUI:
                 print(f"\n[!] Error en demo: {e}")
             finally:
                 sys.stdout = old_stdout
-                
+                msg_queue.put(None)  # Señal de fin al poller
+
+        # Iniciar el polling ANTES de lanzar el hilo
+        poll_queue()
         threading.Thread(target=run_demo_thread, daemon=True).start()
 
     def update_ui(self):
