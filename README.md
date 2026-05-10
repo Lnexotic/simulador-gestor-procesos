@@ -13,7 +13,7 @@ simulador-gestor-procesos/
 │   ├── main.py                # Interfaz gráfica principal (GUI)
 │   ├── core/                  # Núcleo del sistema operativo simulado
 │   │   ├── process.py         # PDB, estados, PID
-│   │   ├── scheduler.py       # Algoritmos FCFS, SJF, RR, Prioridad
+│   │   ├── scheduler.py       # Algoritmos FCFS, SJF
 │   │   └── resource.py        # Gestión de CPU y memoria
 │   ├── ipc/                   # Comunicación entre procesos (IPC)
 │   │   └── producer_consumer.py
